@@ -400,15 +400,23 @@ def clip(message_id, clip_desc=None):
     try:
         channel = parse_qs(request.headers["Nightbot-Channel"])
         user = parse_qs(request.headers["Nightbot-User"])
+        user_id = user.get("providerId")[0]
+        user_level = user.get("userLevel")[0]
+        channel_id = channel.get("providerId")[0]    
     except KeyError:
-        return "Not able to auth"
-
-    channel_id = channel.get("providerId")[0]
+        # Streamlabs doesn't give headers. we assume 
+        # that it is passed as argument instead
+        # in this case we don't get message_id. store it as None
+        message_id = None
+        channel_id = request.args.get("channel_id", None)
+        user_id = request.args.get("user_id", None)
+        if not any([channel_id, user_id]):
+            return "Not able to auth"
+        channel = {"providerId": [channel_id]}
+        user = {"providerId": [user_id]}
+        user_level = "everyone"
+    user_name, user_image = get_channel_name_image(user_id) # we are calling this regardless.
     webhook_url = get_webhook_url(channel_id)
-
-    user_level = user.get("userLevel")[0]
-    user_id = user.get("providerId")[0]
-    user_name = user.get("displayName")[0]
     vids = scrapetube.get_channel(channel_id, content_type="streams", limit=2, sleep=0)
     live_found_flag = False
 
@@ -435,7 +443,6 @@ def clip(message_id, clip_desc=None):
     )
     if delay:
         message_cc_webhook += f"\nDelayed by {delay} seconds."
-    channel_name, channel_image = get_channel_name_image(user_id)
     webhook_name = user_name
     if user_level == "owner":
         webhook_name += f" {owner_icon}"
@@ -455,7 +462,7 @@ def clip(message_id, clip_desc=None):
             url=webhook_url,
             content=message_cc_webhook,
             username=webhook_name,
-            avatar_url=channel_image,
+            avatar_url=user_image,
             allowed_mentions={"role": [], "user": [], "everyone": False},
         )
         webhook.execute()
@@ -488,7 +495,7 @@ def clip(message_id, clip_desc=None):
         webhook = DiscordWebhook(
             url=webhook_url,
             username=user_name,
-            avatar_url=channel_image,
+            avatar_url=user_image,
             allowed_mentions={"role": [], "user": [], "everyone": False},
         )
         file_name = take_screenshot(url, clip_time)
