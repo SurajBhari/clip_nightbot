@@ -1,0 +1,28 @@
+{% extends 'layout.html' %}
+
+{% block head_content %}
+{% endblock %}
+
+{% block content %}
+<center>
+    <form action="/ed" method="post">
+        <select id="clip" name="clip">
+            <option value="">Clip</option>
+            {% for clip in ids %}
+                <option value="{{ clip }}">{{ clip }}</option>
+            {% endfor %} 
+        </select> 
+        </br></br>
+        <input type="password" name="password" placeholder="Password"></br>
+        <input type="text" name="new_name" placeholder="New Name"> </br>
+        <input type="submit" value="Rename" name="rename">
+        <input type="submit" value="Delete" name="delete"></br></br>
+        <input type="text" name="key" placeholder="Key">
+        <input type="text" name="value" placeholder="value">
+        <input type="submit" value="Submit" name="new">
+    </form>
+</center>
+<script>
+    var data = {{ data|tojson }};
+</script>
+{% endblock %}

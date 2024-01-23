@@ -16,6 +16,7 @@
                 <h1>{{ channel_name }} - Clips ({{ data|length }})</h1>
             </div>
         </div>
+        <a href="/cs/{{channel_id}}"> <button type="button" class="btn btn-primary">Stats for {{channel_name}}</button></a>
         <div class="row">
             <div class="col-md-12">
                 <h2>Raw Data</h2>
@@ -152,10 +153,16 @@
                     container.innerHTML += separatorHtml;
                     last_id = clip['stream_id'];
                 }
+                if(clip['discord']['ss_link']){
+                    thumbnail = clip['discord']['ss_link'];
+                }
+                else{
+                    thumbnail = `https://i.ytimg.com/vi/${clip['stream_id']}/sddefault.jpg`;
+                }
                 var cardHtml = `<div class="col-md-4 col-lg-3">`;
                 cardHtml += `<div class="card ${getBorderStyle(clip['author']['level'])}" style="width: 100%;">`;
                 cardHtml += `<a href="${clip['link']}" target="_blank">`;
-                cardHtml += `<img class="card-img-top" src="https://i.ytimg.com/vi/${clip['stream_id']}/sddefault.jpg" alt="Card image cap">`;
+                cardHtml += `<img class="card-img-top" src="${thumbnail}"" alt="Card image cap">`;
                 cardHtml += `</a>`;
                 cardHtml += `<div class="card-body">`;
                 cardHtml += `<a href="${getUserChannelLink(clip['author']['id'])}" target="_blank">`;
@@ -165,9 +172,6 @@
                 cardHtml += `<a href="${clip['link']}" target="_blank">`;
                 cardHtml += `<p class="card-text">${clip['message']}</p>`;
                 cardHtml += `<p class="card-text">${clip['hms']}</p>`;
-                cardHtml += `</a>`;
-                cardHtml += `<a href="${clip['direct_download_link']}">`;
-                cardHtml += `<button type="button" class="btn btn-primary">Download</button>`;
                 cardHtml += `</a>`;
                 cardHtml += `</div>`;
                 cardHtml += `</div>`;

@@ -1,4 +1,4 @@
-from flask import Flask, request, render_template, redirect, url_for, send_file
+from flask import Flask, request, render_template, redirect, url_for, send_file, session
 import dns.resolver, dns.reversename
 from bs4 import BeautifulSoup
 import subprocess
@@ -17,9 +17,27 @@ from typing import Optional, Tuple
 from urllib.parse import parse_qs
 import scrapetube
 from chat_downloader.sites import YouTubeChatDownloader
+import logging
+
+# we are in /var/www/clip_nighbot
+import os
+try:
+    os.chdir("/var/www/clip_nightbot")
+except FileNotFoundError:
+    # we are working locally
+    pass
+
+logging.basicConfig(
+    filename='./record.log', 
+    level=logging.DEBUG, 
+    format=f'%(asctime)s %(levelname)s %(name)s %(threadName)s : %(message)s'
+)
+
 
 app = Flask(__name__)
 
+global download_lock
+download_lock = True
 db = sqlite3.connect("queries.db", check_same_thread=False)
 cur = db.cursor()
 owner_icon = "👑"
@@ -28,7 +46,7 @@ regular_icon = "🧑‍🌾"
 subscriber_icon = "⭐"
 allowed_ip = []  # store the nightbot ips here. or your own ip for testing purpose
 cur.execute(
-    "CREATE TABLE IF NOT EXISTS QUERIES(channel_id VARCHAR(40), message_id VARCHAR(40), clip_desc VARCHAR(40), time int, time_in_seconds int, user_id VARCHAR(40), user_name VARCHAR(40), stream_link VARCHAR(40), webhook VARCHAR(40), delay int, userlevel VARCHAR(40))"
+    "CREATE TABLE IF NOT EXISTS QUERIES(channel_id VARCHAR(40), message_id VARCHAR(40), clip_desc VARCHAR(40), time int, time_in_seconds int, user_id VARCHAR(40), user_name VARCHAR(40), stream_link VARCHAR(40), webhook VARCHAR(40), delay int, userlevel VARCHAR(40), ss_id VARCHAR(40), ss_link VARCHAR(40))"
 )
 db.commit()
 # check if there is a column named webhook in QUERIES table, if not then add it
@@ -49,6 +67,16 @@ if "userlevel" not in colums:
     cur.execute("ALTER TABLE QUERIES ADD COLUMN userlevel VARCHAR(40)")
     db.commit()
     print("Added userlevel column to QUERIES table")
+
+if "ss_id" not in colums:
+    cur.execute("ALTER TABLE QUERIES ADD COLUMN ss_id VARCHAR(40)")
+    db.commit()
+    print("Added ss_id column to QUERIES table")
+
+if "ss_link" not in colums:
+    cur.execute("ALTER TABLE QUERIES ADD COLUMN ss_link VARCHAR(40)")
+    db.commit()
+    print("Added ss_link column to QUERIES table")
 
 # if there is no folder named clips then make one
 if not os.path.exists("clips"):
@@ -74,14 +102,19 @@ def create_managment_webhook():
     return wh
 if management_webhook_url:
     management_webhook = create_managment_webhook() # we implement this function because we have to recreate this wh again and again to use.
-
+    management_webhook.content = "Bot started"
+    try:
+        management_webhook.execute()
+    except request.exceptions.MissingSchema:
+        pass
+    management_webhook = create_managment_webhook()
 
 def get_channel_clips(channel_id: str):
     if not channel_id:
         return {}
     cur.execute(f"select * from QUERIES where channel_id=?", (channel_id,))
     data = cur.fetchall()
-    l = []
+    l = []    
     for y in data:
         x = {}
         level = y[10]
@@ -98,11 +131,19 @@ def get_channel_clips(channel_id: str):
         x["dt"] = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.localtime(y[3]))
         x["hms"] = time_to_hms(y[4])
         x["id"] = y[1][-3:] + str(int(y[4]))
-        x["webhook"] = y[8]
         x["delay"] = y[9]
+        if request.is_secure:
+            htt = "https://"
+        else:
+            htt = "http://"
         x[
             "direct_download_link"
-        ] = f"http://{request.host}{url_for('video', clip_id=x['id'])}"
+        ] = f"{htt}{request.host}{url_for('video', clip_id=x['id'])}"
+        x["discord"] ={
+            "webhook": y[8],
+            "ss_id": y[11],
+            "ss_link": y[12]
+        }
         l.append(x)
     l.reverse()
     return l
@@ -265,14 +306,18 @@ def periodic_task():
     if management_webhook_url:
         management_webhook = create_managment_webhook()
         management_webhook.add_file(file=open("queries.db", "rb"), filename="queries.db")
+        management_webhook.add_file(file=open("record.log", "rb"), filename="record.log")
         management_webhook.content = f"<t:{int(time.time())}:F>"
-        management_webhook.execute()
+        try:
+            management_webhook.execute()
+        except request.exceptions.MissingSchema:
+            print("Invalid webhook url")
+            return
     else:
         print("No management webhook found")
         
 
 def run_scheduled_jobs():
-    schedule.run_all() # initially run all the jobs
     while True:
         schedule.run_pending()
         time.sleep(1)
@@ -280,7 +325,7 @@ def run_scheduled_jobs():
 
 @app.before_request
 def before_request():
-    # if request is for /clip or /delete or /edit then check if its from real account
+    # if request is for /clip or /delete or /edit then check if its from real 
     if "/clip" in request.path or "/delete" in request.path or "/edit" in request.path:
         ip = request.remote_addr
         if ip in allowed_ip:
@@ -325,8 +370,17 @@ def slash():
             channel_info[ch_id[0]]["name"] = channel_name
             channel_info[ch_id[0]]["image"] = channel_image
         ch["id"] = ch_id[0]
-        ch["link"] = f"http://{request.host}{url_for('exports', channel_id=ch_id[0])}"
+        if request.is_secure:
+            htt = "https://"
+        else:
+            htt = "http://"
+        ch["link"] = f"{htt}{request.host}{url_for('exports', channel_id=ch_id[0])}"
         returning.append(ch)
+    """
+    for ch in returning:
+        ch["clips"] = get_channel_clips(ch["id"])
+    NOT A GOOD IDEA. THIS WILL MAKE THE PAGE LOAD SLOWLY. rather show that on admin page.
+    """
     return render_template("home.html", data=returning)
 
 
@@ -342,7 +396,11 @@ def export():
     except KeyError:
         return "Not able to auth"
     channel_id = channel.get("providerId")[0]
-    return f"You can download the export from http://{request.host}{url_for('exports', channel_id=channel_id)}"
+    if request.is_secure:
+        htt = "https://"
+    else:
+        htt = "http://"
+    return f"You can download the export from {htt}{request.host}{url_for('exports', channel_id=channel_id)}"
 
 
 @app.route("/exports/<channel_id>")
@@ -371,10 +429,630 @@ def exports(channel_id=None):
         mod_icon=mod_icon,
         regular_icon=regular_icon,
         subscriber_icon=subscriber_icon,
+        channel_id=channel_id
     )
 
+@app.route("/channelstats/<channel_id>")
+@app.route("/cs/<channel_id>")
+@app.route("/channelstats")
+def channel_stats(channel_id=None):
+    if not channel_id:
+        return redirect(url_for("slash"))
+    cur.execute("SELECT * FROM QUERIES WHERE channel_id=?", (channel_id,))
+    data = cur.fetchall()
+    if not data:
+        return redirect(url_for("slash"))
+    clip_count = len(data)
+    user_count = len(set([x[5] for x in data]))
+    # "Name": no of clips
+    user_clips = {}
+    for x in data:
+        if x[5] not in user_clips:
+            user_clips[x[5]] = 0
+        user_clips[x[5]] += 1
+    # sort
+    user_clips = {k: v for k, v in sorted(user_clips.items(), key=lambda item: item[1], reverse=True)}
+    new_dict = {}
+    # replace dict_keys with actual channel
+    max_count = 0
+    try:
+        streamer_name, streamer_image = channel_info[channel_id]["name"], channel_info[channel_id]["image"]
+    except KeyError:
+        streamer_name, streamer_image = get_channel_name_image(channel_id)
+        channel_info[channel_id] = {}
+        channel_info[channel_id]["name"] = streamer_name
+        channel_info[channel_id]["image"] = streamer_image
 
-# /clip/<message_id>/<clip_desc>?showlink=true&screenshot=true&dealy=-10
+    # sort and get k top clippers
+    user_clips={k: v for k, v in sorted(user_clips.items(), key=lambda item: item[1], reverse=True)}
+    for k, v in user_clips.items():
+        max_count += 1
+        if max_count > 12:
+            break
+        if k in channel_info:
+            new_dict[channel_info[k]["name"]] = v
+        else:
+            channel_name, image = get_channel_name_image(k)
+            new_dict[channel_name] = v
+            channel_info[k] = {}
+            channel_info[k]["name"] = channel_name
+            channel_info[k]["image"] = image
+    new_dict['Others'] = sum(list(user_clips.values())[max_count:])
+    user_clips = new_dict
+
+    top_clippers = {}
+    for x in data:
+        if x[5] not in top_clippers:
+            top_clippers[x[5]] = 0
+        top_clippers[x[5]] += 1
+    top_clippers = {k: v for k, v in sorted(top_clippers.items(), key=lambda item: item[1], reverse=True)}
+    new = []
+    count = 0
+    for k, v in top_clippers.items():
+        count += 1
+        if count > 12:
+            break
+        if k in channel_info:
+            new.append({
+                "name": channel_info[k]["name"],
+                "image": channel_info[k]["image"],
+                "count": v,
+                "link": f"https://youtube.com/channel/{k}",
+                "otherlink": url_for("user_stats", channel_id=k)
+            })
+        else:
+            channel_name, image = get_channel_name_image(k)
+            new.append({
+                "name": channel_name,
+                "image": image,
+                "count": v,
+                "link": f"https://youtube.com/channel/{k}",
+                "otherlink": url_for("user_stats", channel_id=k)
+            })
+            channel_info[k] = {}
+            channel_info[k]["name"] = channel_name
+            channel_info[k]["image"] = image
+    top_clippers = new
+    new_dict = {}
+    # time trend
+    # day : no_of_clips
+    for clip in data:
+        day = time.strftime("%Y-%m-%d", time.localtime(clip[3]))
+        if day not in new_dict:
+            new_dict[day] = 0
+        new_dict[day] += 1
+    time_trend = new_dict
+
+    streamer_trend_data = {}
+    # "clipper" : {day: no_of_clips}
+    streamers_trend_days = []
+    max_count = 0
+    for clip in data:
+        day = time.strftime("%Y-%m-%d", time.localtime(clip[3]))
+        if clip[5] not in streamer_trend_data:
+            streamer_trend_data[clip[5]] = {}
+        if day not in streamer_trend_data[clip[5]]:
+            streamer_trend_data[clip[5]][day] = 0
+        streamer_trend_data[clip[5]][day] += 1
+        if day not in streamers_trend_days:
+            streamers_trend_days.append(day)
+    streamers_trend_days.sort()
+    # replace channel id with channel name
+    new_dict = {}
+    known_k = []
+    max_count = 0
+    # sort
+    streamer_trend_data={k: v for k, v in sorted(streamer_trend_data.items(), key=lambda item: sum(item[1].values()), reverse=True)}
+    for k, v in streamer_trend_data.items():
+        max_count += 1
+        if max_count > 12:
+            break
+        if k in channel_info:
+            new_dict[channel_info[k]["name"]] = v
+        else:
+            channel_name, image = get_channel_name_image(k)
+            new_dict[channel_name] = v
+            channel_info[k] = {}
+            channel_info[k]["name"] = channel_name
+            channel_info[k]["image"] = image
+        known_k.append(k)
+    new_dict['Others'] = {}
+    for k, v in streamer_trend_data.items():
+        if k in known_k:
+            continue
+        for day, count in v.items():
+            if day not in new_dict['Others']:
+                new_dict['Others'][day] = 0
+            new_dict['Others'][day] += count
+    streamer_trend_data = new_dict
+    time_distribution = {}
+    for x in range(24):
+        time_distribution[str(x)] = 0
+    for clip in data:
+        hm = time.strftime("%H", time.localtime(clip[3]))
+        if hm not in time_distribution:
+            time_distribution[hm] = 0
+        time_distribution[hm] += 1
+    message = f"Channel Stats for {streamer_name}. {user_count} users clipped\n{clip_count} clips till now. \nand counting."
+    return render_template(
+        "stats.html",
+        message = message,
+        clip_count=clip_count,
+        user_count=user_count,
+        clip_users=[(k, v) for k, v in user_clips.items()],
+        top_clippers=top_clippers,
+        channel_count = len(user_clips),
+        times= list(time_trend.keys()),
+        counts= list(time_trend.values()),
+        streamer_trend_data=streamer_trend_data,
+        streamers_trend_days=streamers_trend_days,
+        streamers_labels = list(streamer_trend_data.keys()),
+        time_distribution = time_distribution,
+        channel_name=streamer_name,
+        channel_image=streamer_image
+        )
+
+
+@app.route("/userstats/<channel_id>")
+@app.route("/us/<channel_id>")
+@app.route("/userstats")
+def user_stats(channel_id=None):
+    if not channel_id:
+        return redirect(url_for("slash"))
+    cur.execute("SELECT * FROM QUERIES WHERE user_id=?", (channel_id,))
+    data = cur.fetchall()
+    if not data:
+        return redirect(url_for("slash"))
+    clip_count = len(data)
+    user_count = len(set([x[0] for x in data]))
+    # "Name": no of clips
+    user_clips = {}
+    for x in data:
+        if x[0] not in user_clips:
+            user_clips[x[0]] = 0
+        user_clips[x[0]] += 1
+    # sort
+    user_clips = {k: v for k, v in sorted(user_clips.items(), key=lambda item: item[1], reverse=True)}
+    new_dict = {}
+    # replace dict_keys with actual channel
+    max_count = 0
+    try:
+        streamer_name, streamer_image = channel_info[channel_id]["name"], channel_info[channel_id]["image"]
+    except KeyError:
+        streamer_name, streamer_image = get_channel_name_image(channel_id)
+        channel_info[channel_id] = {}
+        channel_info[channel_id]["name"] = streamer_name
+        channel_info[channel_id]["image"] = streamer_image
+
+    # sort and get k top clippers
+    user_clips={k: v for k, v in sorted(user_clips.items(), key=lambda item: item[1], reverse=True)}
+    for k, v in user_clips.items():
+        max_count += 1
+        if max_count > 12:
+            break
+        if k in channel_info:
+            new_dict[channel_info[k]["name"]] = v
+        else:
+            channel_name, image = get_channel_name_image(k)
+            new_dict[channel_name] = v
+            channel_info[k] = {}
+            channel_info[k]["name"] = channel_name
+            channel_info[k]["image"] = image
+    new_dict['Others'] = sum(list(user_clips.values())[max_count:])
+    user_clips = new_dict
+
+    top_clippers = {}
+    for x in data:
+        if x[0] not in top_clippers:
+            top_clippers[x[0]] = 0
+        top_clippers[x[0]] += 1
+    top_clippers = {k: v for k, v in sorted(top_clippers.items(), key=lambda item: item[1], reverse=True)}
+    new = []
+    count = 0
+    for k, v in top_clippers.items():
+        count += 1
+        if count > 12:
+            break
+        if k in channel_info:
+            new.append({
+                "name": channel_info[k]["name"],
+                "image": channel_info[k]["image"],
+                "count": v,
+                "link": f"https://youtube.com/channel/{k}",
+                "otherlink": url_for("channel_stats", channel_id=k)
+            })
+        else:
+            channel_name, image = get_channel_name_image(k)
+            new.append({
+                "name": channel_name,
+                "image": image,
+                "count": v,
+                "link": f"https://youtube.com/channel/{k}",
+                "otherlink": url_for("channel_stats", channel_id=k)
+            })
+            channel_info[k] = {}
+            channel_info[k]["name"] = channel_name
+            channel_info[k]["image"] = image
+    top_clippers = new
+    new_dict = {}
+    # time trend
+    # day : no_of_clips
+    for clip in data:
+        day = time.strftime("%Y-%m-%d", time.localtime(clip[3]))
+        if day not in new_dict:
+            new_dict[day] = 0
+        new_dict[day] += 1
+    time_trend = new_dict
+
+    streamer_trend_data = {}
+    # "clipper" : {day: no_of_clips}
+    streamers_trend_days = []
+    max_count = 0
+    for clip in data:
+        day = time.strftime("%Y-%m-%d", time.localtime(clip[3]))
+        if clip[0] not in streamer_trend_data:
+            streamer_trend_data[clip[0]] = {}
+        if day not in streamer_trend_data[clip[0]]:
+            streamer_trend_data[clip[0]][day] = 0
+        streamer_trend_data[clip[0]][day] += 1
+        if day not in streamers_trend_days:
+            streamers_trend_days.append(day)
+    streamers_trend_days.sort()
+    # replace channel id with channel name
+    new_dict = {}
+    known_k = []
+    max_count = 0
+    # sort
+    streamer_trend_data={k: v for k, v in sorted(streamer_trend_data.items(), key=lambda item: sum(item[1].values()), reverse=True)}
+    for k, v in streamer_trend_data.items():
+        max_count += 1
+        if max_count > 12:
+            break
+        if k in channel_info:
+            new_dict[channel_info[k]["name"]] = v
+        else:
+            channel_name, image = get_channel_name_image(k)
+            new_dict[channel_name] = v
+            channel_info[k] = {}
+            channel_info[k]["name"] = channel_name
+            channel_info[k]["image"] = image
+        known_k.append(k)
+    new_dict['Others'] = {}
+    for k, v in streamer_trend_data.items():
+        if k in known_k:
+            continue
+        for day, count in v.items():
+            if day not in new_dict['Others']:
+                new_dict['Others'][day] = 0
+            new_dict['Others'][day] += count
+    streamer_trend_data = new_dict
+    time_distribution = {}
+    for x in range(24):
+        time_distribution[str(x)] = 0
+    for clip in data:
+        hm = time.strftime("%H", time.localtime(clip[3]))
+        if hm not in time_distribution:
+            time_distribution[hm] = 0
+        time_distribution[hm] += 1
+    message = f"User Stats for {streamer_name}. Clipped\n{clip_count} clips in {user_count} channels till now. and counting."
+    return render_template(
+        "stats.html",
+        message = message,
+        clip_count=clip_count,
+        user_count=user_count,
+        clip_users=[(k, v) for k, v in user_clips.items()],
+        top_clippers=top_clippers,
+        channel_count = len(user_clips),
+        times= list(time_trend.keys()),
+        counts= list(time_trend.values()),
+        streamer_trend_data=streamer_trend_data,
+        streamers_trend_days=streamers_trend_days,
+        streamers_labels = list(streamer_trend_data.keys()),
+        time_distribution = time_distribution,
+        channel_name=streamer_name,
+        channel_image=streamer_image
+        )
+@app.route("/stats")
+def stats():
+    # get clips
+    cur.execute("SELECT * FROM QUERIES")
+    data = cur.fetchall()
+    clip_count = len(data)
+    user_count = len(set([x[5] for x in data]))
+    # "Name": no of clips
+    user_clips = {}
+    for x in data:
+        if x[0] not in user_clips:
+            user_clips[x[0]] = 0
+        user_clips[x[0]] += 1
+    # sort
+    user_clips = {k: v for k, v in sorted(user_clips.items(), key=lambda item: item[1], reverse=True)}
+    # replace dict_keys with actual channel
+    new_dict = {}   
+    for k, v in user_clips.items():
+        if k in channel_info:
+            new_dict[channel_info[k]["name"]] = v
+        else:
+            channel_name, image = get_channel_name_image(k)
+            new_dict[channel_name] = v
+            channel_info[k] = {}
+            channel_info[k]["name"] = channel_name
+            channel_info[k]["image"] = image
+    user_clips = new_dict
+
+    top_clippers = {}
+    for x in data:
+        if x[5] not in top_clippers:
+            top_clippers[x[5]] = 0
+        top_clippers[x[5]] += 1
+    top_clippers = {k: v for k, v in sorted(top_clippers.items(), key=lambda item: item[1], reverse=True)}
+    new = []
+    count = 0
+    for k, v in top_clippers.items():
+        count += 1
+        if count > 12:
+            break
+        if k in channel_info:
+            new.append({
+                "name": channel_info[k]["name"],
+                "image": channel_info[k]["image"],
+                "count": v,
+                "link": f"https://youtube.com/channel/{k}",
+                "otherlink": url_for("user_stats", channel_id=k)
+            })
+        else:
+            channel_name, image = get_channel_name_image(k)
+            new.append({
+                "name": channel_name,
+                "image": image,
+                "count": v,
+                "link": f"https://youtube.com/channel/{k}",
+                "otherlink": url_for("user_stats", channel_id=k)
+            })
+            channel_info[k] = {}
+            channel_info[k]["name"] = channel_name
+            channel_info[k]["image"] = image
+    top_clippers = new
+    new_dict = {}
+    # time trend 
+    # day : no_of_clips
+    for clip in data:
+        day = time.strftime("%Y-%m-%d", time.localtime(clip[3]))
+        if day not in new_dict:
+            new_dict[day] = 0
+        new_dict[day] += 1
+    time_trend = new_dict
+
+    streamer_trend_data = {}
+    # streamer: {day: no_of_clips}
+    streamers_trend_days = []
+    for clip in data:
+        day = time.strftime("%Y-%m-%d", time.localtime(clip[3]))
+        if clip[0] not in streamer_trend_data:
+            streamer_trend_data[clip[0]] = {}
+        if day not in streamer_trend_data[clip[0]]:
+            streamer_trend_data[clip[0]][day] = 0
+        streamer_trend_data[clip[0]][day] += 1
+        if day not in streamers_trend_days:
+            streamers_trend_days.append(day)
+    streamers_trend_days.sort()
+    # replace channel id with channel name
+    new_dict = {}
+    for k, v in streamer_trend_data.items():
+        if k in channel_info:
+            new_dict[channel_info[k]["name"]] = v
+        else:
+            channel_name, image = get_channel_name_image(k)
+            new_dict[channel_name] = v
+            channel_info[k] = {}
+            channel_info[k]["name"] = channel_name
+            channel_info[k]["image"] = image
+    streamer_trend_data = new_dict
+    time_distribution = {}
+    for x in range(24):
+        time_distribution[str(x)] = 0
+    for clip in data:
+        hm = time.strftime("%H", time.localtime(clip[3]))
+        if hm not in time_distribution:
+            time_distribution[hm] = 0
+        time_distribution[hm] += 1
+    message = f"{user_count} users clipped\n{clip_count} clips on \n{len(user_clips)} channels till now. \nand counting."
+    return render_template(
+        "stats.html", 
+        message = message,
+        clip_count=clip_count, 
+        user_count=user_count, 
+        clip_users=[(k, v) for k, v in user_clips.items()],
+        top_clippers=top_clippers,
+        channel_count = len(user_clips),
+        times= list(time_trend.keys()),
+        counts= list(time_trend.values()),
+        streamer_trend_data=streamer_trend_data,
+        streamers_trend_days=streamers_trend_days,
+        streamers_labels = list(streamer_trend_data.keys()),
+        time_distribution = time_distribution,
+        channel_name="All channels",
+        channel_image="/static/logo.svg"
+        )
+
+@app.route("/admin")
+def admin():
+    clip_ids = []
+    cur.execute("SELECT * FROM QUERIES")
+    data = cur.fetchall()
+    for clip in data:
+        clip_id = clip[1][-3:] + str(int(clip[4]))
+        clip_ids.append(clip_id)
+    clip_ids.sort()
+    clip_ids.reverse()
+    channels = []
+    cur.execute("SELECT channel_id FROM QUERIES")
+    data = cur.fetchall()
+    for x in data:
+        if x[0] not in channels:
+            channels.append(x[0])
+    data = {}
+    for channel in channels:
+        data[channel] = get_channel_clips(channel)
+    return render_template("admin.html", ids=clip_ids, data=data)
+
+@app.route("/ed", methods=["POST"])
+def edit_delete():
+    actual_password = get_webhook_url("password") # i know this is not a good way to store password. but i am too lazy to implement a proper login system
+    if not actual_password:
+        return "Password not set"
+    password = request.form.get("password")
+    if password != actual_password:
+        return "Invalid password"
+    # get the clip id
+    print(request.form)
+    clip_id = request.form.get("clip")
+    # get the action
+    if request.form.get("rename") == "Rename":
+        if not request.form.get("clip", None):
+            return "No Clip selected"
+        # edit the clip
+        if not request.form.get("new_name", None):
+            return "No new name provided"
+        new_name = request.form.get("new_name").strip()
+        data = cur.execute(
+            "SELECT * FROM QUERIES WHERE  message_id LIKE ? AND time_in_seconds >= ? AND time_in_seconds < ?",
+            (f"%{clip_id[:3]}", int(clip_id[3:]) - 1, int(clip_id[3:]) + 1),
+        )
+        data = cur.fetchall()
+        if not data:
+            return "Clip not found"
+        old_name = data[0][2]
+        cur.execute(
+            "UPDATE QUERIES SET clip_desc=? WHERE message_id LIKE ? AND time_in_seconds >= ? AND time_in_seconds < ?",
+            (
+                new_name,
+                f"%{clip_id[:3]}",
+                int(clip_id[3:]) - 1,
+                int(clip_id[3:]) + 1,
+            ),
+        )
+        db.commit()
+        webhook_url = get_webhook_url(data[0][0])
+        if webhook_url:
+            hms = time_to_hms(int(data[0][4]))
+            new_message = f"{clip_id} | **{new_name}** \n\n{hms}\n<{data[0][7]}>"
+            if data[0][9]:
+                new_message += f"\nDelayed by {data[0][9]} seconds."
+            webhook = DiscordWebhook(
+                url=webhook_url,
+                id=data[0][8],
+                allowed_mentions={"role": [], "user": [], "everyone": False},
+                content=new_message,
+            )
+            try:
+                webhook.edit()
+            except Exception as e:
+                print(e)
+                pass
+        return f"Edited clip ID {clip_id} from '{old_name}' to '{new_name}'."
+    elif request.form.get("delete") == "Delete":
+        if not request.form.get("clip", None):
+            return "No Clip selected"
+        # delete the clip
+        data = cur.execute(
+            "SELECT * FROM QUERIES WHERE  message_id LIKE ? AND time_in_seconds >= ? AND time_in_seconds < ?",
+            (f"%{clip_id[:3]}", int(clip_id[3:]) - 1, int(clip_id[3:]) + 1),
+        )
+        data = cur.fetchall()
+        if not data:
+            return "Clip not found"
+        cur.execute(
+            "DELETE FROM QUERIES WHERE  message_id LIKE ? AND time_in_seconds >= ? AND time_in_seconds < ?",
+            (f"%{clip_id[:3]}", int(clip_id[3:]) - 1, int(clip_id[3:]) + 1),
+        )
+        db.commit()
+        webhook_url = get_webhook_url(data[0][0])
+        if webhook_url:
+            webhook = DiscordWebhook(
+                url=webhook_url,
+                id=data[0][8],
+                allowed_mentions={"role": [], "user": [], "everyone": False},
+            )
+            try:
+                webhook.delete()
+            except:
+                pass
+            if data[0][11]: # if there is a screenshot then delete that too
+                webhook = DiscordWebhook(
+                    url=webhook_url,
+                    id=data[0][11],
+                    allowed_mentions={"role": [], "user": [], "everyone": False},
+                )
+                try:
+                    webhook.delete()
+                except:
+                    pass
+        return "Deleted"
+    elif request.form.get("new") == "Submit":
+        if not request.form.get("key", None):
+            return "No key provided"
+        if not request.form.get("value", None):
+            return "No value provided"
+        key = request.form.get("key").strip()
+        value = request.form.get("value").strip()
+
+        with open("creds.json", "r") as f:
+            creds = load(f)
+        creds[key] = value
+        with open("creds.json", "w") as f:
+            dump(creds, f, indent=4)
+        return "Added"
+    else:
+        return "what ?"
+    
+    
+
+def get_latest_live(channel_id):
+    vids = scrapetube.get_channel(channel_id, content_type="streams", limit=2, sleep=0)
+    live_found_flag = False
+    for vid in vids:
+        if (
+            vid["thumbnailOverlays"][0]["thumbnailOverlayTimeStatusRenderer"]["style"]
+            == "LIVE"
+        ):
+            live_found_flag = True
+            break
+    if not live_found_flag:
+        return None
+    vid = YouTubeChatDownloader().get_video_data(video_id=vid["videoId"])
+    return vid
+
+@app.route("/uptime")
+def uptime():
+    # returns the uptime of the bot
+    # takes 1 argument seconds
+    try:
+        channel = parse_qs(request.headers["Nightbot-Channel"])
+        user = parse_qs(request.headers["Nightbot-User"])
+    except KeyError:
+        return "Not able to auth"
+    channel_id = channel.get("providerId")[0]
+    latest_live = get_latest_live(channel_id)
+    if not latest_live:
+        return "No live stream found"
+    start_time = latest_live["start_time"] / 1000000
+    current_time = time.time()
+    uptime = current_time - start_time
+    uptime = time_to_hms(uptime)
+    return f"Stream uptime is {uptime}"
+
+@app.route("/stream_info")
+def stream_info():
+    try:
+        channel = parse_qs(request.headers["Nightbot-Channel"])
+        user = parse_qs(request.headers["Nightbot-User"])
+    except KeyError:
+        return "Not able to auth"
+    channel_id = channel.get("providerId")[0]
+    return get_latest_live(channel_id)
+
+# /clip/<message_id>/<clip_desc>?showlink=true&screenshot=true&dealy=-10&silent=2
 @app.route("/clip/<message_id>/")
 @app.route("/clip/<message_id>/<clip_desc>")
 def clip(message_id, clip_desc=None):
@@ -417,21 +1095,13 @@ def clip(message_id, clip_desc=None):
         user_level = "everyone"
     user_name, user_image = get_channel_name_image(user_id) # we are calling this regardless.
     webhook_url = get_webhook_url(channel_id)
-    vids = scrapetube.get_channel(channel_id, content_type="streams", limit=2, sleep=0)
-    live_found_flag = False
 
-    for vid in vids:
-        if (
-            vid["thumbnailOverlays"][0]["thumbnailOverlayTimeStatusRenderer"]["style"]
-            == "LIVE"
-        ):
-            live_found_flag = True
-            break
-    if not live_found_flag:
-        return "No live stream found"
-    # only get the previous chat and don't wait for new one
-    vid = YouTubeChatDownloader().get_video_data(video_id=vid["videoId"])
-    clip_time = request_time - vid["start_time"] / 1000000 + 5
+
+    user_level = user.get("userLevel")[0]
+    user_id = user.get("providerId")[0]
+    user_name = user.get("displayName")[0]
+    vid = get_latest_live(channel_id)
+    clip_time = request_time - vid["start_time"] / 1000000 + 5 
     clip_time += delay
     url = "https://youtu.be/" + vid["original_video_id"] + "?t=" + str(int(clip_time))
     clip_id = message_id[-3:] + str(int(clip_time))
@@ -471,11 +1141,37 @@ def clip(message_id, clip_desc=None):
         webhook_id = None
 
     if show_link:
-        message_to_return += f" See all clips at http://{request.host}{url_for('exports', channel_id=channel_id)}"
+        if request.is_secure:
+            htt = "https://"
+        else:
+            htt = "http://"
+        message_to_return += f" See all clips at {htt}{request.host}{url_for('exports', channel_id=channel_id)}"
 
+    if screenshot and webhook_url:
+        webhook = DiscordWebhook(
+            url=webhook_url,
+            username=user_name,
+            avatar_url=channel_image,
+            allowed_mentions={"role": [], "user": [], "everyone": False},
+        )
+        file_name = take_screenshot(url, clip_time)
+        with open(file_name, "rb") as f:
+            webhook.add_file(file=f.read(), filename="ss.jpg")
+        print(
+            f"Sent screenshot to {user_name} from {channel_id} with message -> {clip_desc} {url}"
+        )
+        webhook.execute()
+        ss_id = webhook.id
+        ss_link = webhook.attachments[0]['url']
+        # remove attribute from ss_link
+        ss_link = ss_link.split("?")[0]
+        
+    else:
+        ss_id = None
+        ss_link = None
     # insert the entry to database
     cur.execute(
-        "INSERT INTO QUERIES VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO QUERIES VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             channel_id,
             message_id,
@@ -488,23 +1184,12 @@ def clip(message_id, clip_desc=None):
             webhook_id,
             delay,
             user_level,
+            ss_id,
+            ss_link
         ),
     )
     db.commit()
-    if screenshot and webhook_url:
-        webhook = DiscordWebhook(
-            url=webhook_url,
-            username=user_name,
-            avatar_url=user_image,
-            allowed_mentions={"role": [], "user": [], "everyone": False},
-        )
-        file_name = take_screenshot(url, clip_time)
-        with open(file_name, "rb") as f:
-            webhook.add_file(file=f.read(), filename="ss.jpg")
-        print(
-            f"Sent screenshot to {user_name} from {channel_id} with message -> {clip_desc} {url}"
-        )
-        webhook.execute()
+
     if silent == 2:
         return message_to_return
     elif silent == 1:
@@ -551,6 +1236,17 @@ def delete(clip_id=None):
             webhook.delete()
         except:
             pass
+        if data[0][11]: # if there is a screenshot then delete that too
+            webhook = DiscordWebhook(
+                url=webhook_url,
+                id=data[0][11],
+                allowed_mentions={"role": [], "user": [], "everyone": False},
+            )
+            try:
+                webhook.delete()
+            except:
+                pass
+
     return f"Deleted clip ID {clip_id}."
 
 
@@ -642,8 +1338,13 @@ def searchx(clip_desc=None):
 def video(clip_id):
     if not id:
         return redirect(url_for("slash"))
+    global download_lock
+    if download_lock:
+        return "Disabled for now. We don't have enough resources to serve you at the moment."
+    download_lock = True
     clip = download_and_store(clip_id)
     if not clip:
+        download_lock = False
         return "Seems like you are trying to download a clip that is currently live. we currently doesn't support that."
     if ".part" in clip:
         # rename to mp4
@@ -663,34 +1364,32 @@ def video(clip_id):
             except:
                 pass
         clip += ".mp4"
+    download_lock = False
     return send_file(clip, as_attachment=True)
 
-
-if __name__ == "__main__":
-    schedule.every(10).minutes.do(periodic_task)
-    scheduler_thread = threading.Thread(target=run_scheduled_jobs)
-    scheduler_thread.start()
+schedule.every(10).minutes.do(periodic_task)
+scheduler_thread = threading.Thread(target=run_scheduled_jobs)
+scheduler_thread.start()
 
 
-    channel_info = {}
-    cur.execute(f"SELECT channel_id FROM QUERIES ORDER BY time DESC")
-    data = cur.fetchall()
+channel_info = {}
+cur.execute(f"SELECT channel_id FROM QUERIES ORDER BY time DESC")
+data = cur.fetchall()
 
 
-    for ch_id in data:
-        if ch_id[0] in channel_info:
-            continue
-        channel_info[ch_id[0]] = {}
-        (
-            channel_info[ch_id[0]]["name"],
-            channel_info[ch_id[0]]["image"],
-        ) = get_channel_name_image(ch_id[0])
-
+for ch_id in data:
+    if ch_id[0] in channel_info:
+        continue
+    channel_info[ch_id[0]] = {}
+    (
+        channel_info[ch_id[0]]["name"],
+        channel_info[ch_id[0]]["image"],
+    ) = get_channel_name_image(ch_id[0])
+    """
     context = ("/root/certs/cert.pem", "/root/certs/key.pem")
-    use_ssl = False
-    if all([os.path.exists(x) for x in context]) and use_ssl:
-        print("Starting with ssl")
-        app.run(host="0.0.0.0", port=5001, ssl_context=context, debug=False)
-    else:
-        print("Starting without ssl")
-        app.run(host="0.0.0.0", port=5001, debug=False)
+    try:
+        app.run(host="0.0.0.0", port=443, ssl_context=context, debug=False)
+    except FileNotFoundError:
+        print("No certs found. running without ssl")
+    app.run(host="0.0.0.0", port=80, debug=True)
+    """

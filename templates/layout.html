@@ -3,6 +3,12 @@
 
 <head>
     <meta charset="utf-8">
+    <link rel="icon" type="image/x-icon" href="/static/logo.svg">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="twitter:title" content="StreamSnip">
+    <meta name="twitter:image" content="/static/logo.svg">
+    <!-- meta data -->
+    <meta property="og:title" content="StreamSnip" />
     <link rel="stylesheet" href="https://use.fontawesome.com/releases/v5.7.1/css/all.css">
     <!-- Bootstrap CSS -->
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-rbsA2VBKQhggwzxH7pPCaAqO46MgnOM80zW1RWuH61DGLwZJEdK2Kadq2F9CUG65" crossorigin="anonymous">
@@ -14,6 +20,7 @@
             var isDarkTheme = localStorage.getItem("darkTheme") === "true";
             const darkThemeMq = window.matchMedia("(prefers-color-scheme: dark)");
             var form_control = document.getElementsByClassName("form-control");
+            var a = document.getElementsByTagName("a");
             if (!localStorage.getItem("darkTheme")) {
                 if (darkThemeMq.matches) {
                     isDarkTheme = true;
@@ -29,15 +36,22 @@
                 for (var i = 0; i < form_control.length; i++) {
                     form_control[i].classList.add("dark-theme");
                 }
+                for (var i = 0; i < a.length; i++) {
+                    a[i].classList.toggle("dark-theme");
+                }
             }
         });
         function toggleDarkTheme() {
             var body = document.body;
             body.classList.toggle("dark-theme");
             var form_control = document.getElementsByClassName("form-control");
+            var a = document.getElementsByTagName("a");
             var isDarkTheme = body.classList.contains("dark-theme");
             for (var i = 0; i < form_control.length; i++) {
                 form_control[i].classList.toggle("dark-theme");
+            }
+            for (var i = 0; i < a.length; i++) {
+                a[i].classList.toggle("dark-theme");
             }
             localStorage.setItem("darkTheme", isDarkTheme);
         }
@@ -50,8 +64,10 @@
     <div class="px-3 py-2 text-bg-dark">
         <div class="container">
             <div class="d-flex flex-wrap align-items-center justify-content-center justify-content-lg-start">
+                <!-- logo here -->
                 <a href="/" class="d-flex align-items-center my-2 my-lg-0 me-lg-auto text-white text-decoration-none">
-                    <h1>Clip Nightbot</h1>
+                    <img src="/static/logo.svg" alt="logo" width="32" height="32" class="bi me-2">
+                    <h2>StreamSnip</h2>
                 </a>
                 <ul class="nav col-12 col-lg-auto my-2 justify-content-center my-md-0 text-small">
                     <li>
@@ -62,6 +78,11 @@
                     <li>
                         <a href="http://discord.surajbhari.info" class="nav-link text-white">
                             <i class="fas fa-plus"></i>  Add your own channel here
+                        </a>
+                    </li>
+                    <li>
+                        <a href="/stats" class="nav-link text-white">
+                            <i class="fas fa-superscript"></i>  Stats
                         </a>
                     </li>
                     <li>
@@ -83,7 +104,7 @@
     <a href="/" class="mb-3 me-2 mb-md-0 text-muted text-decoration-none lh-1">
         <svg class="bi" width="30" height="24"><use xlink:href="#bootstrap"></use></svg>
     </a>
-    <span class="mb-3 mb-md-0 text-muted">© 2023 Suraj Bhari | <a href="https://github.com/surajbhari/clip_nightbot">Source Code </a></span>
+    <span class="mb-3 mb-md-0 text-muted">© 2024 Suraj Bhari | <a href="https://github.com/surajbhari/clip_nightbot">Source Code </a></span>
     </div>
 
     <ul class="nav col-md-4 justify-content-end list-unstyled d-flex">

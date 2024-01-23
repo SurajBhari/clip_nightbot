@@ -1,0 +1,214 @@
+{% extends 'layout.html' %}
+
+
+{% block head_content%}
+<title> {{channel_name}} - stats </title>
+<link rel="icon" href={{ channel_image }} type="image/x-icon">
+<meta property="og:title" content="{{ channel_name }} - Stats ({{ data|length }})" />
+<meta property="og:description" content="Stats for {{ channel_name }}" />
+<meta property="og:image" content="{{ channel_image }}" />
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+{% endblock %}
+
+{% block content %}
+<center>
+    <div class="container">
+        <div class="row">
+            <h1> {{message}} </h1>
+        </div>
+
+        <div class="row">
+            <h1>Clip User Piechart</h1>
+            <canvas id="pieChart" width="700" height="700"></canvas>
+        </div>
+    </br></br></br></br></br>
+        <div class="row">
+            <canvas id="myChart" width="1000" height="800"></canvas>
+        </div>
+        <div class="row">
+            <canvas id="speedChart" width="1000" height="800"></canvas>
+        </div>
+        <div class="row">
+            <canvas id="timedistribution" width="1000" height="800"></canvas>
+        </div>
+        {% if clip_users %}
+        <h1>
+            Top Clippers
+        </h1>
+        <div class="row">
+            {% for user in top_clippers %}
+            <div class="col-md-3 col-lg-3">
+                <a href="{{ user['link'] }}">
+                        <div class="card" style="width: 100%;">
+                            <img class="card-img-top" src="{{user['image']}}" alt="User Profile Picture">
+                            <div class="card-body">
+                                <h5 class="card-title">{{ user['name'] }}</h5>
+                                <p class="card-text">{{ user['count'] }} Clips</p>
+                                <a href="{{ user['otherlink'] }}" class="btn btn-primary">Stats</a>
+                            </div>
+                        </div>
+                </a>
+            </div>
+        {% endfor %}
+        </br></br></br></br></br>
+        {% endif %}
+    </div>
+</center>
+<script>
+    graphs = [];
+    function drawCharts(){
+        // wait for page to load fully
+        // isDark 
+        var isDark = document.body.classList.contains("dark-theme");
+        console.log(isDark);
+        var fontcolor = isDark == true ? 'white' : 'black';
+        Chart.defaults.color = fontcolor;
+        var ctx = document.getElementById('myChart').getContext('2d');
+        var times = {{times|safe}};
+        var counts = {{counts|safe}};
+        function randomColor(){
+            var r = Math.floor(Math.random()*255);
+            var g = Math.floor(Math.random()*255);
+            var b = Math.floor(Math.random()*255);
+            var a = 0.5;
+            return "rgba("+r+","+g+","+b+" ,"+a+")";
+        }
+        // check if there was already a chart. if yes. destroy it 
+        for(var i=0;i<graphs.length;i++){
+            graphs[i].destroy();
+        }
+
+
+        var lineChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: times,
+                datasets: [{
+                    label: 'Clips on that day',
+                    data: counts,
+                    backgroundColor: randomColor(), 
+                    borderColor: randomColor(), 
+                    borderWidth: 3,
+                    fill: true
+                }]
+            },
+            options: {}
+        });
+        lineChart.canvas.parentNode.style.height = '850px';
+        lineChart.canvas.parentNode.style.width = '1200px';
+
+
+        var ctx = document.getElementById('pieChart').getContext('2d');
+        var users = {{clip_users|tojson}};
+        if (pieChart != null) {
+            pieChart.destroy();
+        }
+        var pieChart = new Chart(ctx, {
+            type: 'doughnut',
+            data: {
+                datasets: [{
+                    data: users.map(subarray => subarray[1])
+                }],
+                labels: users.map(subarray => subarray[0])
+            },
+            options: {
+                responsive: true,
+                plugins: {
+                    legend: {
+                        position: 'top',
+                    },
+                    title: {
+                        display: true,
+                        text: ''
+                    }
+                }
+            },
+        });
+        // set chart size to 800 x 800
+        pieChart.canvas.parentNode.style.height = '800px';
+        pieChart.canvas.parentNode.style.width = '800px';
+
+
+        // multi line chart
+        var speedCanvas = document.getElementById("speedChart");
+        var rawData = {{streamer_trend_data|tojson}};
+        var oglabels = {{streamers_labels|tojson}};
+        var dates = {{streamers_trend_days|tojson}};
+        var datasets = [];
+        for (var i = 1; i < Object.keys(rawData).length; i++) {
+            var key = Object.keys(rawData)[i];
+            var dataset = {
+                label: key,
+                data: rawData[key],
+            };
+            datasets.push(dataset);
+        }
+        const data = {
+            labels: dates,
+            datasets: datasets
+        };
+        const config = {
+            type: 'bar',
+            data: data,
+            options: {
+                plugins: {
+                title: {
+                    display: false,
+                    text: ''
+                },
+                },
+                responsive: true,
+                scales: {
+                x: {
+                    stacked: true,
+                },
+                y: {
+                    stacked: true
+                }
+                }
+            }
+        };
+        if (speedData != null) {
+            speedData.destroy();
+        }
+        var speedData = new Chart(speedCanvas, config);
+        // set chart size to 800 x 800
+        speedData.canvas.parentNode.style.height = '850px';
+        speedData.canvas.parentNode.style.width = '1200px';
+        
+        var ctx = document.getElementById('timedistribution').getContext('2d');
+        var timedata = {{time_distribution|tojson}};
+        var timedistribution = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: Object.keys(timedata),
+                datasets: [{
+                    label: 'Clips on that Hour',
+                    data: Object.values(timedata),
+                    backgroundColor: randomColor(), 
+                    borderColor: randomColor(), 
+                    borderWidth: 3,
+                    fill: true
+                }]
+            },
+            options: {},
+            plugins:{
+                title: {
+                    display: true,
+                    text: 'Time Distribution'
+                }
+            }
+        });
+        timedistribution.canvas.parentNode.style.height = '850px';
+        timedistribution.canvas.parentNode.style.width = '1200px';
+        graphs = [lineChart, pieChart, speedData, timedistribution];
+    }
+    document.addEventListener("DOMContentLoaded" , function(){
+        drawCharts();
+    });
+    document.getElementById("theme_button").addEventListener("click", function(){
+        drawCharts();
+    });
+</script>
+{% endblock %}
