@@ -567,6 +567,9 @@ def channel_stats(channel_id=None):
     streamer_trend_data = new_dict
     time_distribution = {}
     for x in range(24):
+        time = x
+        if time < 10:
+            time = f"0{time}"
         time_distribution[str(x)] = 0
     for clip in data:
         hm = time.strftime("%H", time.localtime(clip[3]))
