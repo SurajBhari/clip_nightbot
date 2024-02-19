@@ -73,6 +73,7 @@
                 for (var i = 0; i < a.length; i++) {
                     a[i].classList.toggle("dark-theme");
                 }
+                theme_button.checked = true;
             }
         });
         function toggleDarkTheme() {
@@ -137,9 +138,12 @@
                         </a>
                     </li>
                     <li>
-                        <a href="#" class="nav-link text-white" onclick="toggleDarkTheme()" id="theme_button">
-                            <i class="fa-solid fa-sun"></i>   
-                        </a>                               
+                        <div class="theme-checkbox-wrapper-54">
+                            <label class="switch">
+                              <input type="checkbox" onchange="toggleDarkTheme()" id="theme_button">
+                              <span class="slider"></span>
+                            </label>
+                          </div>         
                     </li>
                 </ul>
             </div>
