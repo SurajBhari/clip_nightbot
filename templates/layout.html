@@ -135,26 +135,21 @@
                 var today_count_element = document.getElementById("today_count");
                 today_count_element.innerHTML = today_count + " Clips Today";
                 var data = last_clip.data;
+                var last_date = data[0].last_clip_date;
                 if(is_home) { // we need to change the order just in case it got changed. 
-                    prev_order = [];
-                    elems = document.getElementsByClassName("card");
-                    for (var i = 0; i < elems.length; i++) {
-                        prev_order.push(elems[i].getElementsByTagName("h6")[0].innerHTML.trim());
-                    }
-                    new_order = [];
+                    new_html = "";
+                    new_html += '<div class="row">';
                     for(var i=0; i < data.length; i++){
-                        new_order.push(data[i].name.trim()); 
-                    }
-                    if(JSON.stringify(prev_order) != JSON.stringify(new_order)){
-                        new_html = "";
-                        new_html += '<div class="row">';
-                        for(var i=0; i < data.length; i++){
-                            new_html += '<div class="col-3"><a href="' + data[i].link + '" target="_blank"><div class="card noborder"><img class="card-img-top rounded" src="' + data[i].image + '" alt="Card image cap"><div class="card-body"><h6 class="card-title">' + data[i].name + '</h6></div></div></a></div>';
+                        if(data[i].last_clip_date != last_date){
+                            // add a new card that have date
+                            new_html += '<div class="col-3"> <div class="card border-secondary" style="align-items:stretch"><div class="card-body"><h6 class="card-title align-items-center justify-content-center">' + data[i].last_clip_date + '</h6></div></div></div>';
+                            last_date = data[i].last_clip_date;
                         }
-                        new_html += '</div>';
-                        document.getElementsByClassName("container")[1].innerHTML = new_html;
-                        console.log("changed");
+                        new_html += '<div class="col-3"><a href="' + data[i].link + '"><div class="card noborder"><img class="card-img-top rounded" src="' + data[i].image + '" alt="Card image cap"><div class="card-body"><h6 class="card-title">' + data[i].name + '</h6></div></div></a></div>';
                     }
+                    new_html += '</div>';
+                    document.getElementsByClassName("container")[1].innerHTML = new_html;
+                    console.log("changed");
                 }
                 is_first_load = false;
             });

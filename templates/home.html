@@ -19,21 +19,8 @@
 
 {% block content %}
 <center>
+    {% set ns = namespace(last_date=none) %}
     <div class="container">
-        <div class="row">
-            {% for channel in data %}
-                <div class="col-3">
-                    <a href="{{ channel['link'] }}">
-                        <div class="card noborder">
-                            <img class="card-img-top rounded" src="{{ channel['image'] }}" alt="Card image cap" load="lazy">
-                            <div class="card-body">
-                                <h6 class="card-title">{{ channel['name'] }}</h6>
-                            </div>
-                        </div>
-                    </a>
-                </div>
-            {% endfor %}
-        </div>
     </div>
 </center>
 <script>

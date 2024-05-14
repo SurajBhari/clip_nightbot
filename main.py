@@ -455,6 +455,7 @@ def generate_home_data():
             "s900-c-k-c0x00ffffff-no-rj", "s300-c-k-c0x00ffffff-no-rj"
         )
         ch["last_clip"] = Clip(clip).json()
+        ch['last_clip_date'] = ch['last_clip']['dt'].split(" ")[0]
         if request.is_secure:
             htt = "https://"
         else:
